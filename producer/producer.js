@@ -2,7 +2,8 @@ const { Kafka } = require("kafkajs");
 
 const kafka = new Kafka({
   clientId: "event-producer",
-  brokers: ["localhost:9092"],
+  // NEW: Read from environment variable for Docker compatibility
+  brokers: [process.env.KAFKA_BROKER || "localhost:9092"], 
 });
 
 const producer = kafka.producer();

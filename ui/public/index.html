@@ -3,69 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Real-Time Analytics Dashboard</title>
+    <title>FAANG Analytics Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; display: flex; flex-direction: column; align-items: center; padding: 40px; margin: 0; }
-        h1 { margin-bottom: 30px; font-weight: 600; }
-        .chart-container { width: 100%; max-width: 800px; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 30px; }
+        h1 { text-align: center; margin-bottom: 40px; font-weight: 600; color: #e2e8f0; }
+        .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; max-width: 1200px; margin: 0 auto; }
+        .card { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+        .card h2 { margin-top: 0; font-size: 1.2rem; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 10px; margin-bottom: 20px;}
+        .full-width { grid-column: 1 / -1; }
+        
+        /* Leaderboard Styles */
+        .leaderboard-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #334155; }
+        .leaderboard-row:last-child { border-bottom: none; }
+        .city-name { font-weight: 500; }
+        .revenue-amount { color: #10b981; font-weight: bold; font-family: monospace; font-size: 1.1rem; }
     </style>
 </head>
 <body>
 
-    <h1>Live Event Stream</h1>
-    <div class="chart-container">
-        <canvas id="metricsChart"></canvas>
+    <h1>Live Operations Center</h1>
+    
+    <div class="grid">
+        <div class="card full-width">
+            <h2>Global Event Volume (10s Rolling)</h2>
+            <canvas id="mainChart" height="80"></canvas>
+        </div>
+
+        <div class="card">
+            <h2>Active Ride Requests by City</h2>
+            <canvas id="cityChart"></canvas>
+        </div>
+
+        <div class="card">
+            <h2>Revenue Leaderboard (10s Rolling)</h2>
+            <div id="leaderboard">
+                </div>
+        </div>
     </div>
 
     <script>
-        const ctx = document.getElementById('metricsChart').getContext('2d');
-        
-        // Initialize an empty chart
-        const metricsChart = new Chart(ctx, {
+        // Set global chart defaults for dark mode
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.scale.grid.color = 'rgba(255,255,255,0.05)';
+
+        // 1. Initialize Main Bar Chart
+        const mainCtx = document.getElementById('mainChart').getContext('2d');
+        const mainChart = new Chart(mainCtx, {
             type: 'bar',
             data: {
                 labels: ['Page Views', 'Ride Requests', 'Rides Completed'],
                 datasets: [{
-                    label: 'Events in last 10 seconds',
+                    label: 'Events Count',
                     data: [0, 0, 0],
-                    backgroundColor: [
-                        'rgba(59, 130, 246, 0.8)', // Blue
-                        'rgba(245, 158, 11, 0.8)', // Orange
-                        'rgba(16, 185, 129, 0.8)'  // Green
-                    ],
-                    borderWidth: 0,
+                    backgroundColor: ['#3b82f6', '#f59e0b', '#10b981'],
                     borderRadius: 4
                 }]
             },
-            options: {
-                responsive: true,
-                animation: { duration: 400 }, // Smooth transitions
-                scales: {
-                    y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#94a3b8' } },
-                    x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 14 } } }
-                },
-                plugins: {
-                    legend: { labels: { color: '#f8fafc' } }
-                }
-            }
+            options: { animation: { duration: 400 }, plugins: { legend: { display: false } } }
         });
 
-        // Listen for Server-Sent Events from our Node backend
+        // 2. Initialize City Doughnut Chart
+        const cityCtx = document.getElementById('cityChart').getContext('2d');
+        const cityChart = new Chart(cityCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Atlanta', 'San Francisco', 'New York', 'Chicago'],
+                datasets: [{
+                    data: [0, 0, 0, 0],
+                    backgroundColor: ['#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'],
+                    borderWidth: 0
+                }]
+            },
+            options: { animation: { duration: 400 }, cutout: '70%' }
+        });
+
+        // 3. Handle SSE Stream
         const eventSource = new EventSource('/stream');
+        const leaderboardDiv = document.getElementById('leaderboard');
 
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
             
-            // Map the Redis keys to our chart data array
-            // Default to 0 if the key doesn't exist yet
-            metricsChart.data.datasets[0].data = [
-                parseInt(data['page_view'] || 0),
-                parseInt(data['ride_request'] || 0),
-                parseInt(data['ride_complete'] || 0)
+            // Update Main Chart
+            mainChart.data.datasets[0].data = [
+                parseInt(data.metrics['page_view'] || 0),
+                parseInt(data.metrics['ride_request'] || 0),
+                parseInt(data.metrics['ride_complete'] || 0)
             ];
-            
-            metricsChart.update();
+            mainChart.update();
+
+            // Update Doughnut Chart
+            cityChart.data.datasets[0].data = [
+                parseInt(data.requests['Atlanta'] || 0),
+                parseInt(data.requests['San Francisco'] || 0),
+                parseInt(data.requests['New York'] || 0),
+                parseInt(data.requests['Chicago'] || 0)
+            ];
+            cityChart.update();
+
+            // Update Revenue Leaderboard
+            const revenueData = data.revenue || {};
+            // Convert to array and sort highest to lowest
+            const sortedCities = Object.entries(revenueData)
+                .sort((a, b) => parseFloat(b[1]) - parseFloat(a[1]));
+
+            leaderboardDiv.innerHTML = sortedCities.map(([city, amount]) => `
+                <div class="leaderboard-row">
+                    <span class="city-name">${city}</span>
+                    <span class="revenue-amount">$${parseFloat(amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+                </div>
+            `).join('') || '<div class="leaderboard-row">Waiting for completed rides...</div>';
         };
     </script>
 </body>

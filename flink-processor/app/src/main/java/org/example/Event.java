@@ -3,9 +3,10 @@ package org.example;
 public class Event {
     public String userId;
     public String eventType;
+    public String city;
+    public double amount;
     public long timestamp;
 
-    // Flink requires an empty constructor
     public Event() {
     }
 

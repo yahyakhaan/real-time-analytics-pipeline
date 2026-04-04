@@ -19,45 +19,36 @@ import java.time.Duration;
 
 public class StreamingJob {
 
-    // --- CUSTOM REDIS SINK ---
-    // Demonstrates understanding of Flink's distributed lifecycle
-    public static class RedisSink extends RichSinkFunction<Tuple2<String, Integer>> {
+    // A reusable Redis Sink that takes the target Hash name as a parameter
+    public static class RedisSink extends RichSinkFunction<Tuple2<String, String>> {
+        private final String hashName;
         private transient Jedis jedis;
 
+        public RedisSink(String hashName) {
+            this.hashName = hashName;
+        }
+
         @Override
-        public void open(Configuration parameters) throws Exception {
-            // Flink calls this ONCE per TaskManager thread before processing starts.
-            // "redis" resolves to the Docker container named redis.
+        public void open(Configuration parameters) {
             jedis = new Jedis("redis", 6379);
         }
 
         @Override
-        public void invoke(Tuple2<String, Integer> value, Context context) throws Exception {
-            // Flink calls this for EVERY windowed record.
-            // We store the data in a Redis Hash.
-            // Key: "realtime_metrics", Field: eventType, Value: count
-            jedis.hset("realtime_metrics", value.f0, String.valueOf(value.f1));
+        public void invoke(Tuple2<String, String> value, Context context) {
+            jedis.hset(hashName, value.f0, value.f1);
         }
 
         @Override
-        public void close() throws Exception {
-            // Flink calls this on shutdown to prevent memory leaks.
-            if (jedis != null) {
+        public void close() {
+            if (jedis != null)
                 jedis.close();
-            }
         }
     }
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-
-        // --- FAANG TIER: RESILIENCE ---
-        // Enable Checkpointing every 5 seconds. Flink will take a snapshot of the
-        // window
-        // state and offsets. If a node dies, it recovers exactly-once processing.
         env.enableCheckpointing(5000);
 
-        // 1. Kafka Source
         KafkaSource<String> source = KafkaSource.<String>builder()
                 .setBootstrapServers("kafka:9092")
                 .setTopics("events.raw")
@@ -66,32 +57,48 @@ public class StreamingJob {
                 .setValueOnlyDeserializer(new SimpleStringSchema())
                 .build();
 
-        DataStream<String> rawStream = env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka Source");
+        DataStream<Event> timedStream = env
+                .fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka Source")
+                .map(json -> new ObjectMapper().readValue(json, Event.class))
+                .assignTimestampsAndWatermarks(WatermarkStrategy
+                        .<Event>forBoundedOutOfOrderness(Duration.ofSeconds(2))
+                        .withTimestampAssigner((event, timestamp) -> event.timestamp));
 
-        // 2. Parse JSON -> Event POJO
-        DataStream<Event> eventStream = rawStream.map(json -> {
-            ObjectMapper mapper = new ObjectMapper();
-            return mapper.readValue(json, Event.class);
-        });
-
-        // 3. Assign Event-Time Watermarks
-        WatermarkStrategy<Event> watermarkStrategy = WatermarkStrategy
-                .<Event>forBoundedOutOfOrderness(Duration.ofSeconds(2))
-                .withTimestampAssigner((event, timestamp) -> event.timestamp);
-
-        DataStream<Event> timedStream = eventStream.assignTimestampsAndWatermarks(watermarkStrategy);
-
-        // 4. Analytics: Count events per type every 10 seconds
-        DataStream<Tuple2<String, Integer>> aggregatedStream = timedStream
-                .map(event -> new Tuple2<>(event.eventType, 1))
+        // stream 1: Overall Events (Count)
+        timedStream
+                .map(e -> new Tuple2<>(e.eventType, 1))
                 .returns(Types.TUPLE(Types.STRING, Types.INT))
-                .keyBy(tuple -> tuple.f0)
+                .keyBy(t -> t.f0)
                 .window(TumblingEventTimeWindows.of(Time.seconds(10)))
-                .sum(1);
+                .sum(1)
+                .map(t -> new Tuple2<>(t.f0, String.valueOf(t.f1)))
+                .returns(Types.TUPLE(Types.STRING, Types.STRING))
+                .addSink(new RedisSink("realtime_metrics"));
 
-        // 5. THE SINK: Write to Redis instead of standard output
-        aggregatedStream.addSink(new RedisSink());
+        // stream 2: Ride Requests by City (Count)
+        timedStream
+                .filter(e -> e.eventType.equals("ride_request"))
+                .map(e -> new Tuple2<>(e.city, 1))
+                .returns(Types.TUPLE(Types.STRING, Types.INT))
+                .keyBy(t -> t.f0)
+                .window(TumblingEventTimeWindows.of(Time.seconds(10)))
+                .sum(1)
+                .map(t -> new Tuple2<>(t.f0, String.valueOf(t.f1)))
+                .returns(Types.TUPLE(Types.STRING, Types.STRING))
+                .addSink(new RedisSink("requests_by_city"));
 
-        env.execute("Real-Time Analytics Pipeline");
+        // stream 3: Revenue by City (Sum of amount)
+        timedStream
+                .filter(e -> e.eventType.equals("ride_complete"))
+                .map(e -> new Tuple2<>(e.city, e.amount))
+                .returns(Types.TUPLE(Types.STRING, Types.DOUBLE))
+                .keyBy(t -> t.f0)
+                .window(TumblingEventTimeWindows.of(Time.seconds(10)))
+                .sum(1)
+                .map(t -> new Tuple2<>(t.f0, String.format("%.2f", t.f1))) // Format to 2 decimal places
+                .returns(Types.TUPLE(Types.STRING, Types.STRING))
+                .addSink(new RedisSink("revenue_by_city"));
+
+        env.execute("Multi-Dimensional Analytics Pipeline");
     }
 }

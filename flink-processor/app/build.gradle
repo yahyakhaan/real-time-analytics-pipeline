@@ -21,6 +21,8 @@ dependencies {
 
     // Connectors (Must be bundled in the JAR, so we use implementation)
     implementation 'org.apache.flink:flink-connector-kafka:1.17.0'
+    // Jackson for JSON parsing
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
 
 }
 

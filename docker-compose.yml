@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Configure listeners so Docker containers AND your host machine can reach Kafka
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Node.js event generator
+  producer:
+    build: ./producer
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BROKER=kafka:9092
+
+  # Flink JobManager
+  jobmanager:
+    build: ./flink-processor
+    ports:
+      - "8081:8081"
+    # standalone-job tells Flink to immediately run the jar in /opt/flink/usrlib
+    command: standalone-job --job-classname org.example.StreamingJob
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+
+  # Flink TaskManager running built code
+  taskmanager:
+    build: ./flink-processor
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    scale: 1
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2

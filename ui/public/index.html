@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Analytics Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; display: flex; flex-direction: column; align-items: center; padding: 40px; margin: 0; }
+        h1 { margin-bottom: 30px; font-weight: 600; }
+        .chart-container { width: 100%; max-width: 800px; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+    </style>
+</head>
+<body>
+
+    <h1>Live Event Stream</h1>
+    <div class="chart-container">
+        <canvas id="metricsChart"></canvas>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('metricsChart').getContext('2d');
+        
+        // Initialize an empty chart
+        const metricsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Page Views', 'Ride Requests', 'Rides Completed'],
+                datasets: [{
+                    label: 'Events in last 10 seconds',
+                    data: [0, 0, 0],
+                    backgroundColor: [
+                        'rgba(59, 130, 246, 0.8)', // Blue
+                        'rgba(245, 158, 11, 0.8)', // Orange
+                        'rgba(16, 185, 129, 0.8)'  // Green
+                    ],
+                    borderWidth: 0,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                animation: { duration: 400 }, // Smooth transitions
+                scales: {
+                    y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#94a3b8' } },
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 14 } } }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f8fafc' } }
+                }
+            }
+        });
+
+        // Listen for Server-Sent Events from our Node backend
+        const eventSource = new EventSource('/stream');
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            // Map the Redis keys to our chart data array
+            // Default to 0 if the key doesn't exist yet
+            metricsChart.data.datasets[0].data = [
+                parseInt(data['page_view'] || 0),
+                parseInt(data['ride_request'] || 0),
+                parseInt(data['ride_complete'] || 0)
+            ];
+            
+            metricsChart.update();
+        };
+    </script>
+</body>
+</html>

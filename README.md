@@ -48,7 +48,7 @@ The entire distributed ecosystem is containerized and orchestrated via Docker Co
 #### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/realtime-analytics.git
+git clone https://github.com/yahyakhaan/realtime-analytics.git
 cd realtime-analytics
 ```
 
@@ -106,4 +106,4 @@ docker-compose.yml # Infrastructure orchestration
 
 ## License
 
-MIT License (or your preferred license)
+MIT License

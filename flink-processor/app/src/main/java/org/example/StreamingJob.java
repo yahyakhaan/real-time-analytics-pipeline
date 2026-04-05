@@ -6,6 +6,9 @@ import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.jdbc.JdbcConnectionOptions;
+import org.apache.flink.connector.jdbc.JdbcExecutionOptions;
+import org.apache.flink.connector.jdbc.JdbcSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -47,8 +50,11 @@ public class StreamingJob {
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Essential for exactly-once processing and failure recovery
         env.enableCheckpointing(5000);
 
+        // 1. Kafka Source
         KafkaSource<String> source = KafkaSource.<String>builder()
                 .setBootstrapServers("kafka:9092")
                 .setTopics("events.raw")
@@ -57,6 +63,7 @@ public class StreamingJob {
                 .setValueOnlyDeserializer(new SimpleStringSchema())
                 .build();
 
+        // 2. Ingest, Parse, and Assign Watermarks
         DataStream<Event> timedStream = env
                 .fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka Source")
                 .map(json -> new ObjectMapper().readValue(json, Event.class))
@@ -87,19 +94,43 @@ public class StreamingJob {
                 .returns(Types.TUPLE(Types.STRING, Types.STRING))
                 .addSink(new RedisHashSink("requests_by_city"));
 
-        // STREAM 3: Revenue by City (Sum)
-        timedStream
+        // STREAM 3: The Dual-Sink Topology (Revenue by City)
+        // First, we calculate the core aggregation
+        DataStream<Tuple2<String, Double>> revenueAggregation = timedStream
                 .filter(e -> e.eventType.equals("ride_complete"))
                 .map(e -> new Tuple2<>(e.city, e.amount))
                 .returns(Types.TUPLE(Types.STRING, Types.DOUBLE))
                 .keyBy(t -> t.f0)
                 .window(TumblingEventTimeWindows.of(Time.seconds(10)))
-                .sum(1)
+                .sum(1);
+
+        // Path A: Write to Redis (String formatting for the live dashboard)
+        revenueAggregation
                 .map(t -> new Tuple2<>(t.f0, String.format("%.2f", t.f1)))
                 .returns(Types.TUPLE(Types.STRING, Types.STRING))
                 .addSink(new RedisHashSink("revenue_by_city"));
 
-        // NEW STREAM 4: Time-Series History (For the Line Chart)
+        // Path B: Write to PostgreSQL (Durable storage for historical analysis)
+        revenueAggregation.addSink(
+                JdbcSink.sink(
+                        "INSERT INTO historical_revenue (city, amount) VALUES (?, ?)",
+                        (statement, tuple) -> {
+                            statement.setString(1, tuple.f0);
+                            statement.setDouble(2, tuple.f1);
+                        },
+                        JdbcExecutionOptions.builder()
+                                .withBatchSize(200) // Batch inserts for high throughput
+                                .withBatchIntervalMs(1000) // Or flush every 1 second
+                                .withMaxRetries(5) // Fault tolerance
+                                .build(),
+                        new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                                .withUrl("jdbc:postgresql://postgres:5432/analytics")
+                                .withDriverName("org.postgresql.Driver")
+                                .withUsername("admin")
+                                .withPassword("password")
+                                .build()));
+
+        // STREAM 4: Time-Series History (For the Line Chart)
         timedStream
                 .map(e -> new Tuple2<>("ALL_EVENTS", 1))
                 .returns(Types.TUPLE(Types.STRING, Types.INT))
@@ -129,7 +160,7 @@ public class StreamingJob {
                     }
                 });
 
-        // NEW STREAM 5: Unique Active Users (HyperLogLog)
+        // STREAM 5: Unique Active Users (HyperLogLog)
         timedStream
                 .addSink(new RichSinkFunction<Event>() {
                     private transient Jedis jedis;
@@ -152,6 +183,6 @@ public class StreamingJob {
                     }
                 });
 
-        env.execute("V2: Multi-Dimensional Analytics Pipeline");
+        env.execute("Lambda Architecture Analytics Pipeline");
     }
 }

@@ -69,3 +69,15 @@ services:
       - redis
     environment:
       - REDIS_URL=redis://redis:6379
+
+  # Historical Data Store
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: analytics
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql

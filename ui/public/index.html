@@ -53,6 +53,11 @@
             <div id="leaderboard"></div>
         </div>
     </div>
+    <h2 style="margin-top: 50px; border-bottom: 1px solid #334155; padding-bottom: 10px;">Historical Analysis (PostgreSQL)</h2>
+    <div class="card full-width" style="margin-bottom: 50px;">
+        <h2>All-Time Revenue by City</h2>
+        <canvas id="historicalChart" height="80"></canvas>
+    </div>
 
     <script>
         Chart.defaults.color = '#94a3b8';
@@ -113,6 +118,34 @@
                 </div>
             `).join('') || '<div class="leaderboard-row">Waiting for completed rides...</div>';
         };
+        // --- NEW: Historical Data Logic ---
+        
+        // Initialize Historical Bar Chart
+        const histCtx = document.getElementById('historicalChart').getContext('2d');
+        const historicalChart = new Chart(histCtx, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'All-Time Revenue ($)', data: [], backgroundColor: '#6366f1', borderRadius: 4 }] },
+            options: { animation: { duration: 800 }, plugins: { legend: { display: false } } }
+        });
+
+        // Function to fetch from Postgres API
+        async function fetchHistoricalData() {
+            try {
+                const response = await fetch('/api/history/revenue');
+                const data = await response.json();
+                
+                // Map the Postgres rows to Chart.js arrays
+                historicalChart.data.labels = data.map(row => row.city);
+                historicalChart.data.datasets[0].data = data.map(row => parseFloat(row.total_revenue));
+                historicalChart.update();
+            } catch (err) {
+                console.error("Failed to fetch historical data", err);
+            }
+        }
+
+        // Fetch immediately, then poll every 15 seconds (no need to hammer the DB)
+        fetchHistoricalData();
+        setInterval(fetchHistoricalData, 15000);
     </script>
 </body>
 </html>

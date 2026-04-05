@@ -20,12 +20,15 @@ async function startServer() {
 
     const intervalId = setInterval(async () => {
       try {
-        // Fetch all three metric hashes
         const metrics = await redisClient.hGetAll('realtime_metrics');
         const requests = await redisClient.hGetAll('requests_by_city');
         const revenue = await redisClient.hGetAll('revenue_by_city');
         
-        res.write(`data: ${JSON.stringify({ metrics, requests, revenue })}\n\n`);
+        // Fetch history array and Unique User count
+        const history = await redisClient.lRange('requests_history', 0, -1);
+        const uniqueUsers = await redisClient.pfCount('unique_users');
+        
+        res.write(`data: ${JSON.stringify({ metrics, requests, revenue, history, uniqueUsers })}\n\n`);
       } catch (err) {
         console.error('Error fetching from Redis:', err);
       }

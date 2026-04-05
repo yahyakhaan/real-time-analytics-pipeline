@@ -19,22 +19,22 @@ import java.time.Duration;
 
 public class StreamingJob {
 
-    // A reusable Redis Sink that takes the target Hash name as a parameter
-    public static class RedisSink extends RichSinkFunction<Tuple2<String, String>> {
+    // Standard Sink for Redis Hashes
+    public static class RedisHashSink extends RichSinkFunction<Tuple2<String, String>> {
         private final String hashName;
         private transient Jedis jedis;
 
-        public RedisSink(String hashName) {
+        public RedisHashSink(String hashName) {
             this.hashName = hashName;
         }
 
         @Override
-        public void open(Configuration parameters) {
+        public void open(Configuration p) {
             jedis = new Jedis("redis", 6379);
         }
 
         @Override
-        public void invoke(Tuple2<String, String> value, Context context) {
+        public void invoke(Tuple2<String, String> value, Context ctx) {
             jedis.hset(hashName, value.f0, value.f1);
         }
 
@@ -64,7 +64,7 @@ public class StreamingJob {
                         .<Event>forBoundedOutOfOrderness(Duration.ofSeconds(2))
                         .withTimestampAssigner((event, timestamp) -> event.timestamp));
 
-        // stream 1: Overall Events (Count)
+        // STREAM 1: Overall Events (Count)
         timedStream
                 .map(e -> new Tuple2<>(e.eventType, 1))
                 .returns(Types.TUPLE(Types.STRING, Types.INT))
@@ -73,9 +73,9 @@ public class StreamingJob {
                 .sum(1)
                 .map(t -> new Tuple2<>(t.f0, String.valueOf(t.f1)))
                 .returns(Types.TUPLE(Types.STRING, Types.STRING))
-                .addSink(new RedisSink("realtime_metrics"));
+                .addSink(new RedisHashSink("realtime_metrics"));
 
-        // stream 2: Ride Requests by City (Count)
+        // STREAM 2: Ride Requests by City (Count)
         timedStream
                 .filter(e -> e.eventType.equals("ride_request"))
                 .map(e -> new Tuple2<>(e.city, 1))
@@ -85,9 +85,9 @@ public class StreamingJob {
                 .sum(1)
                 .map(t -> new Tuple2<>(t.f0, String.valueOf(t.f1)))
                 .returns(Types.TUPLE(Types.STRING, Types.STRING))
-                .addSink(new RedisSink("requests_by_city"));
+                .addSink(new RedisHashSink("requests_by_city"));
 
-        // stream 3: Revenue by City (Sum of amount)
+        // STREAM 3: Revenue by City (Sum)
         timedStream
                 .filter(e -> e.eventType.equals("ride_complete"))
                 .map(e -> new Tuple2<>(e.city, e.amount))
@@ -95,10 +95,63 @@ public class StreamingJob {
                 .keyBy(t -> t.f0)
                 .window(TumblingEventTimeWindows.of(Time.seconds(10)))
                 .sum(1)
-                .map(t -> new Tuple2<>(t.f0, String.format("%.2f", t.f1))) // Format to 2 decimal places
+                .map(t -> new Tuple2<>(t.f0, String.format("%.2f", t.f1)))
                 .returns(Types.TUPLE(Types.STRING, Types.STRING))
-                .addSink(new RedisSink("revenue_by_city"));
+                .addSink(new RedisHashSink("revenue_by_city"));
 
-        env.execute("Multi-Dimensional Analytics Pipeline");
+        // NEW STREAM 4: Time-Series History (For the Line Chart)
+        timedStream
+                .map(e -> new Tuple2<>("ALL_EVENTS", 1))
+                .returns(Types.TUPLE(Types.STRING, Types.INT))
+                .keyBy(t -> t.f0)
+                .window(TumblingEventTimeWindows.of(Time.seconds(10)))
+                .sum(1)
+                .addSink(new RichSinkFunction<Tuple2<String, Integer>>() {
+                    private transient Jedis jedis;
+
+                    @Override
+                    public void open(Configuration p) {
+                        jedis = new Jedis("redis", 6379);
+                    }
+
+                    @Override
+                    public void invoke(Tuple2<String, Integer> value, Context ctx) {
+                        // LPUSH adds to the front of a list, LTRIM keeps only the last 30 items (5
+                        // mins)
+                        jedis.lpush("requests_history", String.valueOf(value.f1));
+                        jedis.ltrim("requests_history", 0, 29);
+                    }
+
+                    @Override
+                    public void close() {
+                        if (jedis != null)
+                            jedis.close();
+                    }
+                });
+
+        // NEW STREAM 5: Unique Active Users (HyperLogLog)
+        timedStream
+                .addSink(new RichSinkFunction<Event>() {
+                    private transient Jedis jedis;
+
+                    @Override
+                    public void open(Configuration p) {
+                        jedis = new Jedis("redis", 6379);
+                    }
+
+                    @Override
+                    public void invoke(Event value, Context ctx) {
+                        // PFADD adds elements to the HyperLogLog probabilistic structure
+                        jedis.pfadd("unique_users", value.userId);
+                    }
+
+                    @Override
+                    public void close() {
+                        if (jedis != null)
+                            jedis.close();
+                    }
+                });
+
+        env.execute("V2: Multi-Dimensional Analytics Pipeline");
     }
 }

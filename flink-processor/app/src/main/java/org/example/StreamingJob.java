@@ -130,7 +130,7 @@ public class StreamingJob {
                                 .withPassword("password")
                                 .build()));
 
-        // STREAM 4: Time-Series History (For the Line Chart)
+        // STREAM 4: Time-Series History
         timedStream
                 .map(e -> new Tuple2<>("ALL_EVENTS", 1))
                 .returns(Types.TUPLE(Types.STRING, Types.INT))
@@ -174,6 +174,35 @@ public class StreamingJob {
                     public void invoke(Event value, Context ctx) {
                         // PFADD adds elements to the HyperLogLog probabilistic structure
                         jedis.pfadd("unique_users", value.userId);
+                    }
+
+                    @Override
+                    public void close() {
+                        if (jedis != null)
+                            jedis.close();
+                    }
+                });
+
+        // STREAM 6: Pipeline Latency
+        timedStream
+                .map(event -> {
+                    // System processing time minus the exact millisecond the event was generated
+                    long latency = System.currentTimeMillis() - event.timestamp;
+                    // Prevent negative latency from slight clock drifts across Docker containers
+                    return String.valueOf(Math.max(0, latency));
+                })
+                .addSink(new RichSinkFunction<String>() {
+                    private transient Jedis jedis;
+
+                    @Override
+                    public void open(Configuration p) {
+                        jedis = new Jedis("redis", 6379);
+                    }
+
+                    @Override
+                    public void invoke(String value, Context ctx) {
+                        // SET replaces the value instantly (no hash map needed)
+                        jedis.set("pipeline_latency_ms", value);
                     }
 
                     @Override

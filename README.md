@@ -4,6 +4,8 @@ A production-grade, fault-tolerant event processing pipeline demonstrating a mod
 
 Built with **Apache Kafka**, **Apache Flink**, **Redis**, **PostgreSQL**, **Node.js**, and **React**.
 
+![System Design Diagram](assets/system.png)
+
 ![Dashboard Preview](https://via.placeholder.com/800x400.png?text=Live+Operations+Dashboard+Preview)
 
 ---

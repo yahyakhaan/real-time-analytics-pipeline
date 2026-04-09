@@ -14,12 +14,12 @@ It achieves this by decoupling data ingestion from processing, utilizing statefu
 
 The pipeline processes data through five distinct stages:
 
-1. **Ingestion (Node.js -> Kafka):** A simulated microservice generates randomized, multi-dimensional JSON events (page views, ride requests, completed rides with revenue) at a rate of 10 events/sec and publishes them to an Apache Kafka topic.
+1. **Ingestion (Node.js -> Kafka):** A simulated microservice generates randomized, multi-dimensional JSON events at a baseline rate, while a UI-triggered API endpoint allows for on-demand, high-volume traffic surges ("God Mode"). Both publish directly to an Apache Kafka topic.
 2. **Stream Processing (Apache Flink):** Flink consumes the raw stream, parses the JSON, and assigns Event-Time watermarks to handle out-of-order data.
-3. **Stateful Aggregation:** Flink partitions the stream by dimensions (e.g., event type, city) and calculates rolling aggregates over a 10-second Tumbling Window. It also updates probabilistic data structures (HyperLogLog) to estimate unique active users without unbounded memory growth.
-4. **Dual-Sink Routing (Redis + PostgreSQL):** \* _The Hot Path:_ Aggregations are written to Redis (Hashes and Lists) to overwrite the current live state for sub-millisecond retrieval.
+3. **Stateful Aggregation & Observability:** Flink partitions the stream by dimensions (e.g., event type, city) and calculates rolling aggregates over a 10-second Tumbling Window. It updates probabilistic data structures (HyperLogLog) for active users and executes a fast-path calculation to measure end-to-end pipeline latency in real-time.
+4. **Dual-Sink Routing (Redis + PostgreSQL):** - _The Hot Path:_ Aggregations and latency metrics are written to Redis (Hashes, Lists, and Strings) to overwrite the current live state for sub-millisecond retrieval.
    - _The Cold Path:_ Revenue aggregates are dual-written to PostgreSQL via JDBC batch inserts to build a permanent, queryable ledger.
-5. **Presentation (Node.js API -> React SPA):** A backend service maintains an open Server-Sent Events (SSE) connection with the React frontend to stream live Redis updates, while providing REST endpoints to query the historical PostgreSQL data.
+5. **Presentation (Node.js API -> React SPA):** A backend service maintains an open Server-Sent Events (SSE) connection with the React frontend to stream live Redis updates. It also provides REST endpoints to query the historical PostgreSQL data and inject simulated traffic payloads back into Kafka.
 
 ## 4. Technology Stack & Rationale
 
@@ -30,8 +30,8 @@ The pipeline processes data through five distinct stages:
   - _RichSinkFunctions:_ Custom implementations to manage external database connection pools across the cluster.
 - **Redis (In-Memory Datastore):** Required for the "hot" data path. Flink writes to Redis at high frequencies, and the API reads from it continuously without incurring disk I/O penalties.
 - **PostgreSQL (Relational Database):** Used as the durable "cold" storage for historical aggregations, allowing for complex, post-hoc querying.
-- **Node.js & Express (Backend API):** The event-driven, non-blocking I/O model of Node.js is uniquely suited for holding open hundreds of concurrent Server-Sent Event (SSE) connections.
-- **React & Chart.js (Frontend):** Provides a component-based, highly reactive UI that can consume rapid data streams and animate complex visualizations without forcing full DOM re-renders.
+- **Node.js & Express (Backend API):** The event-driven, non-blocking I/O model of Node.js is uniquely suited for holding open Server-Sent Event (SSE) connections while concurrently acting as a KafkaJS producer for live traffic simulations.
+- **React & Chart.js (Frontend):** Provides a component-based, highly reactive UI that can consume rapid data streams, manage optimistic loading states, and animate complex visualizations without forcing full DOM re-renders.
 - **Docker Compose (Infrastructure):** Ensures the entire distributed ecosystem runs consistently and deterministically across any environment.
 
 ## 5. Version & Evolution History
@@ -40,4 +40,5 @@ The pipeline processes data through five distinct stages:
 - **v1.1 - Containerization:** Migrated the infrastructure to Docker Compose. Upgraded Flink to the modern `KafkaSource` API. Implemented a multi-stage Gradle build to create a deployable Fat JAR.
 - **v2.0 - Stateful Stream Processing:** Introduced Jackson for JSON serialization. Replaced processing-time with event-time watermarking. Implemented 10-second Tumbling Windows to calculate live aggregates. Replaced `stdout` with a custom Redis `RichSinkFunction`.
 - **v2.1 - The Dashboard:** Enriched the event payload with geographic (`city`) and financial (`amount`) dimensions. Added a Node.js Express server acting as an SSE bridge to a vanilla HTML/Chart.js frontend.
-- **v3.0 - Lambda Architecture (Current):** Evolved into a multi-sink topology. Added PostgreSQL for durable historical storage. Implemented HyperLogLog (`PFADD`/`PFCOUNT`) for memory-efficient Unique Active User tracking. Migrated the frontend to a React SPA built with Vite for improved state management and component isolation.
+- **v3.0 - Lambda Architecture:** Evolved into a multi-sink topology. Added PostgreSQL for durable historical storage. Implemented HyperLogLog (`PFADD`/`PFCOUNT`) for memory-efficient Unique Active User tracking. Migrated the frontend to a React SPA built with Vite for improved state management and component isolation.
+- **v3.1 - Observability & Simulation (Current):** Added an interactive "God Mode" control panel allowing the React UI to publish high-volume traffic surges directly to Kafka via the Node.js API. Implemented a fast-path Flink stream to calculate and expose true end-to-end pipeline latency in real-time.
